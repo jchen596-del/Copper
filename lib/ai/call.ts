@@ -3,10 +3,12 @@ import { generateText, Output, streamText } from "ai";
 import type { z } from "zod";
 import { defaultModel, MODELS, type ModelId } from "@/lib/ai/models";
 import { costUsd } from "@/lib/ai/pricing";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 // Every model call in the app goes through this file, so each one is logged
 // with its tokens, cost and how long it took. The log goes to the terminal
-// running the app, as a line starting "[ai_calls]".
+// running the app, as a line starting "[ai_calls]", and to the ai_calls table
+// when SUPABASE_SECRET_KEY is set.
 
 export class AiNotConfiguredError extends Error {
   constructor() {
@@ -54,9 +56,21 @@ function languageModel(model: ModelId) {
   return createGoogleGenerativeAI({ apiKey: googleKey })(id);
 }
 
-/** Prints one line per model call, so the cost and time are visible. */
+/**
+ * Prints one line per model call, so the cost and time are visible, and saves
+ * the same row to the ai_calls table when the secret key is set. Logging must
+ * never break an answer, so a failed save is warned about and swallowed.
+ */
 async function logCall(row: AiCallRow): Promise<void> {
   console.info("[ai_calls]", JSON.stringify(row));
+  const supabase = createAdminClient();
+  if (!supabase) return;
+  try {
+    const { error } = await supabase.from("ai_calls").insert(row);
+    if (error) console.warn("[ai_calls] not saved:", error.message);
+  } catch (error) {
+    console.warn("[ai_calls] not saved:", (error as Error).message);
+  }
 }
 
 type Usage = { inputTokens?: number; outputTokens?: number };

@@ -116,3 +116,34 @@ chats keep separate histories so the tools-off model can't copy a tools answer.
 chat is labeled as possibly made up. The tools only read, so a bad tool call
 can't change anything. If the stock list can't be read, the tool says so
 instead of guessing. Every question is logged to `ai_calls` for cost.
+
+## Cost logging: the `ai_calls` table
+
+**Summary:** Every model call was already printed to the terminal; now the same
+row is also saved to a database table, so cost per module and feature survives
+the terminal window closing.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Table | `supabase/migrations/20261105000000_ai_calls.sql` | `ai_calls`: module, feature, model, tokens, `cost_usd`, `latency_ms`, `ok`, `created_at` |
+| Admin client | `lib/supabase/admin.ts` | `createAdminClient()`: a Supabase client holding the secret key; returns `null` when it isn't set |
+| Config | `lib/supabase/config.ts` | `supabaseAdminConfig()` reads `SUPABASE_SECRET_KEY` |
+| Write | `lib/ai/call.ts` (`logCall`) | Prints the line, then inserts the same row |
+
+**Data flow:** model call finishes → `logCall()` prints `[ai_calls] {...}` →
+`createAdminClient()` → insert into `ai_calls`. No key set, no client, no
+insert: the call still works and still prints.
+
+**Decisions and trade-offs:** The write uses `SUPABASE_SECRET_KEY`, not the
+publishable key, because the publishable key ships to the browser and anyone
+holding it could forge cost rows. Row level security is on with **no policies**,
+so only the secret key reaches this table. `logCall` awaits the insert rather
+than firing and forgetting, because Vercel can end a serverless request before
+a detached write lands; the cost is a few milliseconds per answer. A failed
+insert is warned about and swallowed, so logging can never break an answer.
+
+**Risks and open questions:** The prompt and the reply are deliberately **not**
+stored — only counts, cost and timing — so a leak of this table reveals no
+customer questions. The secret key must never get a `NEXT_PUBLIC_` prefix or it
+would reach the browser. The table grows one row per call, with no cleanup
+policy yet.
