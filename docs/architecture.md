@@ -96,3 +96,53 @@ each step. Module 3 teaches it to answer from the customer documents.
 | Instructions | `lib/copper/assistant/instructions.ts` | `COPPER_INSTRUCTIONS`. Copper says it can't help yet with warranty, setup, troubleshooting or privacy |
 | Data | `lib/copper/inventory.ts`, `lib/copper/documents.ts` | Stock from `lib/copper/data/inventory.json`; `DOCUMENTS`: the four customer documents and their PDF paths under `public/docs/`. The PDFs are added in class |
 | AI calls | `{ module: 2, feature: "ask-copper" }` | One streamed call per question |
+
+## Module 3: document search index (RAG)
+
+**Summary:** Copper's four customer PDFs are turned into 95 short passages,
+each embedded with Gemini so it can be found by meaning rather than by keyword.
+The passages and their vectors are saved to one JSON file that the app loads
+into memory at startup, ready for Ask Copper to search.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Build script | `scripts/build-rag-index.mts` (`npm run rag:build`) | Reads every PDF in `public/docs/`, drops the header and footer lines that repeat across pages, splits each page into passages of up to 3 sentences or 700 characters, prefixes each with its document title, embeds them all and writes the index |
+| Data | `lib/copper/data/rag-index.json` | 95 passages (0.73 MB): id, document id and title, page number, the embedded text and a 768-number vector |
+| Loader | `lib/copper/rag.ts` | Imports the JSON once at startup, so searching is pure arithmetic. `searchPassages(queryEmbedding)` ranks passages by cosine similarity; `passageCounts()` reports how many came from each document |
+| Tool | `lib/copper/assistant/tools.ts` → `search_documents` | Embeds the shopper's question as a query, returns the closest passages above 0.58 with their document and page, or `nothing_found` / `unavailable` |
+| Lab page | `app/rag/page.tsx` (`/rag`) | Type a question, see the passages and scores that come back. A teaching view of the index, not a customer page |
+| AI calls | `lib/ai/call.ts` → `callEmbed`: `{ module: 3, feature: "rag-index" }` at build, `"rag-search"` on `/rag`, `"ask-copper-search"` from the tool | One batched `gemini-embedding-001` call per build (~1s for 95 passages) and one per question (~300ms). Google reports no token usage for embeddings, so the `ai_calls` line logs a null cost |
+
+**Data flow:** `npm run rag:build` → pdf.js text per page → passages → one
+batched embedding call → `rag-index.json` → imported into memory at startup →
+`searchPassages()` at question time.
+
+**Decisions and trade-offs:**
+
+- **768 dimensions, not the model's full 3072.** Keeps the file at 0.73 MB
+  instead of ~3 MB for a handful of pages, with no noticeable loss in ranking.
+  Shorter Gemini vectors come back un-normalized, so the search divides by both
+  vector lengths rather than assuming a length of 1.
+- **A JSON file in the repo, not a vector database.** 95 passages fit in memory
+  with room to spare, the whole index is readable and diffable, and there is no
+  service to set up. A database only starts to pay off in the thousands.
+- **Passage text starts with the document title.** A passage read on its own
+  still says where it came from, which helps both the ranking and the model's
+  citation of it.
+- **Repeated lines are dropped by shape, not by a hard-coded list.** Page
+  numbers differ per page, so lines are compared with their digits blanked out:
+  "Page 1 of 6" and "Page 2 of 6" count as the same line and are removed when
+  they appear on most pages.
+
+**Risks and open questions:**
+
+- The index is a snapshot. Change a PDF and `npm run rag:build` has to run
+  again, or answers quietly go stale. The `builtAt` field records when.
+- Sentence splitting is a regex, so an unusual abbreviation can split a
+  sentence in the wrong place. It only affects passage edges, not correctness.
+- The 0.58 score floor was measured against these four documents, not derived.
+  Questions they answer score 0.63 and up; off-topic ones peak near 0.52.
+  Replace the PDFs with very different ones and that gap should be re-checked.
+- Copper is told to answer only from the passages it gets back and to name the
+  document and page. That is an instruction, not a guarantee: the documents
+  contain deliberate contradictions, so answers still need spot-checking.

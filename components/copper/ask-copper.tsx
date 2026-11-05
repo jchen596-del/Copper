@@ -39,7 +39,7 @@ import { cn } from "@/lib/utils";
 const STARTERS = [
   "How much is Copper Home with Copper Plus, paid yearly, for 2 years?",
   "Is Copper Notes in Night Sky in stock?",
-  "Is Copper Plus cheaper monthly or yearly?",
+  "What does the warranty cover?",
 ];
 
 type Turn = { question: string; progress: Progress };
@@ -148,7 +148,7 @@ export function AskCopper({ aiConfigured }: { aiConfigured: boolean }) {
                   Ask Copper
                 </SheetTitle>
                 <SheetDescription className="text-xs text-white/70">
-                  Prices, totals and stock, checked with tools.
+                  Prices, stock and the customer documents, checked with tools.
                 </SheetDescription>
               </div>
               <SheetClose asChild>
@@ -197,8 +197,8 @@ export function AskCopper({ aiConfigured }: { aiConfigured: boolean }) {
                   <div className="space-y-2">
                     {turns.length === 0 && (
                       <p className="text-muted-foreground text-sm">
-                        Hi, I&apos;m Copper! Ask me about prices, totals or
-                        stock. Try one of these:
+                        Hi, I&apos;m Copper! Ask me about prices, stock, or
+                        anything in our guides and terms. Try one of these:
                       </p>
                     )}
                     {STARTERS.map((starter) => (
@@ -225,7 +225,7 @@ export function AskCopper({ aiConfigured }: { aiConfigured: boolean }) {
                   aria-label="Your question"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
-                  placeholder="Ask about prices or stock…"
+                  placeholder="Ask about prices, stock or the documents…"
                   className="bg-background focus-visible:ring-ring h-10 flex-1 rounded-full border px-4 text-sm outline-none focus-visible:ring-2"
                 />
                 <Button
@@ -600,6 +600,31 @@ function ToolOutput({ name, output }: { name: string; output: any }) {
           <div key={c.color} className="flex items-center justify-between">
             <span>{c.color}</span>
             <StockPill stock={c.stock} restockDate={c.restockDate} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (name === "search_documents" && output?.status) {
+    if (output.status === "unavailable")
+      return <p className="text-xs">{output.message}</p>;
+    if (output.status === "nothing_found")
+      return (
+        <p className="text-xs">Nothing in the documents matched closely.</p>
+      );
+    return (
+      <div className="space-y-3 text-xs">
+        {output.passages.map((passage: any, i: number) => (
+          <div key={`${passage.document}-${passage.page}-${i}`}>
+            <div className="font-medium">
+              {passage.document}{" "}
+              <span className="text-muted-foreground font-normal">
+                page {passage.page}
+              </span>
+            </div>
+            <p className="text-muted-foreground mt-0.5 leading-relaxed">
+              {passage.text}
+            </p>
           </div>
         ))}
       </div>

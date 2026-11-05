@@ -15,3 +15,10 @@ export function costUsd(
   const price = PRICING[model];
   return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
 }
+
+// Embeddings only read text, so they're billed on input tokens alone.
+export const EMBEDDING_PRICE_PER_MTOK = 0.15;
+
+export function embeddingCostUsd(inputTokens: number): number {
+  return (inputTokens * EMBEDDING_PRICE_PER_MTOK) / 1_000_000;
+}
