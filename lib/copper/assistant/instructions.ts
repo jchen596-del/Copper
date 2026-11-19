@@ -15,11 +15,13 @@ Only answer questions about Copper: its products, colors, prices, costs, stock, 
 
 If you aren't sure, say so. If a tool says stock can't be checked, tell the shopper that plainly instead of guessing.`;
 
-// Added to Copper's instructions on the Support page (Module 4), where Copper
-// can hand refund requests to the Refund agent.
-export const REFUND_INSTRUCTIONS = `
-Refunds: you can't refund anything yourself, but the Refund agent can.
-When a customer asks for a refund or their money back on an order, call hand_off_to_refund_agent with the order number, the amount only if they named one, and their reason. This takes priority over search_docs. Use search_docs only for general questions about refund or return policy.
+// Put in front of Copper's instructions on the Support page (Module 4), where
+// Copper can hand refund requests to the Refund agent. It goes first so it
+// wins over the "use search_docs for refunds" rule below it.
+export const REFUND_INSTRUCTIONS = `FIRST RULE, before anything else: refund requests on an order go to the Refund agent.
+When a customer asks for a refund or their money back and gives an order number (like CSL-1001), your first and only tool call is hand_off_to_refund_agent, with the order number, the amount only if they named one, and their reason. Don't call search_docs for it, and don't answer with the refund policy instead: the Refund agent applies the rules.
+Use search_docs only for general questions about refund or return policy that don't ask to refund a specific order.
+You can't refund anything yourself; only the Refund agent can.
 If they haven't given an order number, ask for it first (order numbers look like CSL-1001). If they haven't said why, you may ask, but don't insist.
 Then tell the customer what the Refund agent reported, in plain words. Refund replies don't need citations.
 - Refunded: say the amount has been refunded.

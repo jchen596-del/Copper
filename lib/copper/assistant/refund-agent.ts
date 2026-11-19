@@ -7,12 +7,13 @@
 // - The Refund agent (AI) reads the request and fills in the order and amount.
 // - issue_refund (code) compares the amount with the auto-refund limit.
 // - A person approves or rejects anything over the limit in the Refund Console.
-import { stepCountIs, tool } from "ai";
+import { hasToolCall, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { callText } from "@/lib/ai/call";
 import { formatUsd } from "@/lib/copper/catalog";
 import {
   issueRefund,
+  type IssueRefundResult,
   lookUpOrder,
   type Refund,
   type RefundDesk,
@@ -107,15 +108,23 @@ export async function runRefundAgent(
       instructions: REFUND_AGENT_INSTRUCTIONS,
       prompt: `Refund request from Copper.\nOrder: ${request.orderId}\nAmount: ${amount}\nCustomer's reason: ${request.reason}`,
       tools,
-      stopWhen: stepCountIs(4),
+      // Stop as soon as the refund is issued: the code's decision is the
+      // report, which saves a model call (the free tier allows few a day).
+      stopWhen: [hasToolCall("issue_refund"), stepCountIs(4)],
     },
   );
 
   const refund = made.refund as Refund | null;
-  const fallback = refund
-    ? `Order ${refund.orderId}: ${formatUsd(refund.amountUsd)} ${refund.status === "refunded" ? "was refunded" : "is waiting for a person to approve it"}.`
-    : "The Refund agent couldn't issue a refund for this request.";
-  return { report: text.trim() || fallback, refund, steps };
+  const issued = steps.findLast((s) => s.tool === "issue_refund")?.output as
+    IssueRefundResult | undefined;
+  const report =
+    issued?.status === "ok"
+      ? `Order ${issued.refund.orderId}, ${formatUsd(issued.refund.amountUsd)}. ${issued.decision}`
+      : issued?.status === "error"
+        ? `No refund issued: ${issued.message}`
+        : text.trim() ||
+          "The Refund agent couldn't issue a refund for this request.";
+  return { report, refund, steps };
 }
 
 const deskSchema = z.object({
