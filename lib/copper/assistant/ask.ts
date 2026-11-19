@@ -7,15 +7,28 @@
 import { stepCountIs } from "ai";
 import { callStream, THOUGHT_SUMMARIES } from "@/lib/ai/call";
 import { createLive, type Live } from "@/lib/ai/live";
-import { COPPER_INSTRUCTIONS } from "@/lib/copper/assistant/instructions";
+import {
+  COPPER_INSTRUCTIONS,
+  REFUND_INSTRUCTIONS,
+} from "@/lib/copper/assistant/instructions";
 import type { Progress, ToolStep } from "@/lib/copper/assistant/progress";
+import {
+  parseDesk,
+  refundHandoffTools,
+} from "@/lib/copper/assistant/refund-agent";
 import { copperTools } from "@/lib/copper/assistant/tools";
+import type { RefundDesk } from "@/lib/copper/orders";
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
 export type AskCopperRequest = {
   messages: ChatMessage[];
   useTools: boolean;
+  /**
+   * Sent from the Support page only: the auto-refund limit and the refunds so
+   * far. With it, Copper can hand refund requests to the Refund agent.
+   */
+  refundDesk?: RefundDesk;
 };
 
 export type AskCopperResult = { progress: Live<Progress> };
@@ -28,6 +41,7 @@ const SORRY = "Sorry, something went wrong on my end. Please try again.";
 export async function askCopper({
   messages,
   useTools,
+  refundDesk,
 }: AskCopperRequest): Promise<AskCopperResult> {
   const { live, update, done } = createLive<Progress>();
   const progress: Progress = { steps: [], reply: "", status: "working" };
@@ -42,6 +56,8 @@ export async function askCopper({
       (step): step is ToolStep => step.type === "tool" && step.id === id,
     );
 
+  const desk = refundDesk === undefined ? null : parseDesk(refundDesk);
+
   // Without tools, send no instructions either: "always use your tools" with
   // no tools makes the model answer with nothing.
   const result = callStream(
@@ -50,8 +66,12 @@ export async function askCopper({
       messages,
       providerOptions: THOUGHT_SUMMARIES,
       ...(useTools && {
-        instructions: COPPER_INSTRUCTIONS,
-        tools: copperTools,
+        instructions: desk
+          ? COPPER_INSTRUCTIONS + REFUND_INSTRUCTIONS
+          : COPPER_INSTRUCTIONS,
+        tools: desk
+          ? { ...copperTools, ...refundHandoffTools(desk) }
+          : copperTools,
         stopWhen: stepCountIs(MAX_STEPS),
       }),
     },

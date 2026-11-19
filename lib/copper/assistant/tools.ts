@@ -1,19 +1,20 @@
-// Module 2: the four tools Ask Copper can use. Products and prices come from
-// lib/copper/catalog.ts and stock from lib/copper/inventory.ts, so the
+// The tools Ask Copper can use. Products and prices come from
+// lib/copper/catalog.ts and stock from lib/copper/inventory.ts (Module 2);
+// search_docs finds passages in the customer documents (Module 3). So the
 // chatbot never has to make them up.
 // Each tool returns plain data; the model writes the reply around it.
 import { tool } from "ai";
 import { z } from "zod";
-import { callEmbed } from "@/lib/ai/call";
+import { callEmbedMany } from "@/lib/ai/call";
 import {
   getPlans,
   getProducts,
   type Plan,
   type ProductId,
 } from "@/lib/copper/catalog";
-import { DOCUMENTS } from "@/lib/copper/documents";
+import { DOCUMENTS, pageUrl } from "@/lib/copper/documents";
 import { readInventory } from "@/lib/copper/inventory";
-import { searchPassages } from "@/lib/copper/rag";
+import { PASSAGES } from "@/lib/copper/passages";
 
 export type ProductList = {
   products: {
@@ -180,75 +181,56 @@ export async function checkAvailability(
   };
 }
 
-export type DocumentPassage = {
-  document: string;
+export type DocMatch = {
+  title: string;
   page: number;
+  /** Opens the PDF at that page. */
+  url: string;
+  /** The passage, without the document title it was embedded with. */
   text: string;
-  /** Where the PDF is served, so a reply can link to the page it used. */
-  file: string;
+  /** How close in meaning to the query: 1 is identical. */
+  score: number;
 };
 
-export type DocumentSearch =
-  | { status: "ok"; passages: DocumentPassage[] }
-  | { status: "nothing_found" }
-  | { status: "unavailable"; message: string };
+export type DocSearchResult = { matches: DocMatch[] };
 
-export const searchDocumentsInput = z.object({
-  question: z.string().min(3).max(300),
-});
+const SEARCH_RESULTS = 5;
 
-export type SearchDocumentsInput = z.infer<typeof searchDocumentsInput>;
-
-/**
- * How alike a passage must be to count as worth reading. Measured against
- * these documents: questions they answer score 0.63 and up, while off-topic
- * ones ("what is the capital of France?") peak around 0.52, so 0.58 sits in
- * the gap. Re-check it if the documents change a lot.
- */
-const MIN_SCORE = 0.58;
-const MOST_PASSAGES = 5;
-
-/**
- * search_documents: the passages of Copper's customer PDFs that come closest
- * in meaning to a question. The question is embedded the same way the passages
- * were (see lib/copper/rag.ts), then compared against every one of them.
- */
-export async function searchDocuments(
-  input: SearchDocumentsInput,
-): Promise<DocumentSearch> {
-  let embedding: number[];
-  try {
-    const { embeddings } = await callEmbed(
-      { module: 3, feature: "ask-copper-search" },
-      [input.question],
-      "RETRIEVAL_QUERY",
-    );
-    embedding = embeddings[0];
-  } catch {
-    // Copper should say the documents can't be read right now rather than
-    // answer warranty or privacy questions from memory.
-    return {
-      status: "unavailable",
-      message: "The documents can't be searched right now.",
-    };
+/** Cosine similarity: how closely two embeddings point the same way. */
+function similarity(a: number[], b: number[]): number {
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
   }
+  return dot / Math.sqrt(aa * bb);
+}
 
-  const matches = searchPassages(embedding, MOST_PASSAGES).filter(
-    (match) => match.score >= MIN_SCORE,
-  );
-  if (matches.length === 0) return { status: "nothing_found" };
-
-  return {
-    status: "ok",
-    passages: matches.map((match) => ({
-      document: match.documentTitle,
-      page: match.page,
-      // Each passage is stored with its title in front; `document` already
-      // says that, so send the passage itself.
-      text: match.text.slice(match.documentTitle.length).replace(/^\.\s*/, ""),
-      file: DOCUMENTS.find((d) => d.id === match.documentId)?.file ?? "",
-    })),
-  };
+/** search_docs: the passages in the customer documents closest in meaning to the query. */
+export async function searchDocs(query: string): Promise<DocSearchResult> {
+  const {
+    embeddings: [embedding],
+  } = await callEmbedMany({ module: 3, feature: "search-docs" }, [query]);
+  const matches = PASSAGES.map((passage) => ({
+    passage,
+    score: similarity(embedding, passage.embedding),
+  }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, SEARCH_RESULTS)
+    .map(({ passage, score }) => {
+      const doc = DOCUMENTS.find((d) => d.id === passage.documentId)!;
+      return {
+        title: passage.title,
+        page: passage.page,
+        url: pageUrl(doc, passage.page),
+        text: passage.text.slice(`${passage.title}: `.length),
+        score: Math.round(score * 100) / 100,
+      };
+    });
+  return { matches };
 }
 
 export const copperTools = {
@@ -275,10 +257,17 @@ export const copperTools = {
     inputSchema: checkAvailabilityInput,
     execute: async (input) => checkAvailability(input),
   }),
-  search_documents: tool({
+  search_docs: tool({
     description:
-      "Searches Copper's customer documents (the user guides, the terms and conditions, and the Copper Plus FAQ) and returns the passages closest to a question, each with its document and page number. Use it for warranty, returns, setup, troubleshooting, privacy, recordings and subscription terms.",
-    inputSchema: searchDocumentsInput,
-    execute: async (input) => searchDocuments(input),
+      "Searches Copper's customer documents (the Copper Home and Copper Notes user guides, the Terms and Conditions, and the Copper Plus FAQ). Returns the 5 passages closest in meaning to the query, each with its document title, page number and a link to that page.",
+    inputSchema: z.object({
+      query: z
+        .string()
+        .min(2)
+        .describe(
+          "What to look for, with the product name if known, e.g. 'reset Wi-Fi on Copper Home'.",
+        ),
+    }),
+    execute: async ({ query }) => searchDocs(query),
   }),
 };

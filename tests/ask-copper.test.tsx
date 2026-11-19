@@ -132,7 +132,7 @@ async function answer(result: { progress: Live<Progress> }) {
 const STARTERS = [
   "How much is Copper Home with Copper Plus, paid yearly, for 2 years?",
   "Is Copper Notes in Night Sky in stock?",
-  "What does the warranty cover?",
+  "Is Copper Plus cheaper monthly or yearly?",
 ];
 
 const HOME_PLUS_2_YEARS = {
@@ -567,7 +567,6 @@ describe("Part B: the pricing tools", () => {
         "check_availability",
         "get_prices",
         "get_products",
-        "search_documents",
       ]),
     );
     for (const [name, tool] of Object.entries(copperTools)) {
@@ -773,7 +772,6 @@ describe("Part C: askCopper", () => {
         "check_availability",
         "get_prices",
         "get_products",
-        "search_documents",
       ]),
     );
   });
