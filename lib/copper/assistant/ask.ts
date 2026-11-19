@@ -17,7 +17,7 @@ import {
   refundHandoffTools,
 } from "@/lib/copper/assistant/refund-agent";
 import { copperTools } from "@/lib/copper/assistant/tools";
-import type { RefundDesk } from "@/lib/copper/orders";
+import { isRefundRequest, type RefundDesk } from "@/lib/copper/orders";
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
@@ -57,6 +57,11 @@ export async function askCopper({
     );
 
   const desk = refundDesk === undefined ? null : parseDesk(refundDesk);
+  // A refund request that names an order always goes to the Refund agent:
+  // code makes Copper's first step the hand-off instead of leaving it to the
+  // model, which sometimes answered with the refund policy instead.
+  const handOffFirst =
+    desk !== null && isRefundRequest(messages.at(-1)?.content ?? "");
 
   // Without tools, send no instructions either: "always use your tools" with
   // no tools makes the model answer with nothing.
@@ -73,6 +78,17 @@ export async function askCopper({
           ? { ...copperTools, ...refundHandoffTools(desk) }
           : copperTools,
         stopWhen: stepCountIs(MAX_STEPS),
+        ...(handOffFirst && {
+          prepareStep: ({ stepNumber }: { stepNumber: number }) =>
+            stepNumber === 0
+              ? {
+                  toolChoice: {
+                    type: "tool" as const,
+                    toolName: "hand_off_to_refund_agent",
+                  },
+                }
+              : undefined,
+        }),
       }),
     },
   );

@@ -51,6 +51,14 @@ export function findOrder(orderId: string): Order | undefined {
   return digits ? ORDERS.find((o) => o.id === `CSL-${digits}`) : undefined;
 }
 
+/** "Please refund order CSL-1004" → true: it asks for money back and names an order. */
+export function isRefundRequest(message: string): boolean {
+  return (
+    /\bCSL[-\s]?\d+/i.test(message) &&
+    /\b(refund|money back|reimburse|cancel and refund)/i.test(message)
+  );
+}
+
 /** How much of an order can still be refunded: refunds already made or waiting count against it. */
 export function remainingUsd(
   order: Order,
