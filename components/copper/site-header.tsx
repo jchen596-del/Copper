@@ -10,7 +10,9 @@ const LINKS = [
   { href: "/#plus", label: "Copper Plus", phone: false },
   { href: "/#privacy", label: "Privacy", phone: false },
   { href: "/support", label: "Support" },
-  { href: "/#ask", label: "Ask Copper" },
+  // "#ask" opens the chat on the page you're on, so on Support it stays
+  // beside the Refund Console instead of going to the home page.
+  { href: "#ask", label: "Ask Copper" },
 ];
 
 export function SiteHeader() {

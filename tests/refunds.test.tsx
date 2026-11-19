@@ -327,3 +327,52 @@ describe("the Refund Console", () => {
     );
   });
 });
+
+describe("routing a refund request (code, not the model)", () => {
+  it("spots a refund request that names an order", async () => {
+    const { isRefundRequest } = await import("@/lib/copper/orders");
+    expect(
+      isRefundRequest(
+        "I'd like a refund for order CSL-1001. I don't use Copper Plus anymore.",
+      ),
+    ).toBe(true);
+    expect(isRefundRequest("Please refund order csl 1004")).toBe(true);
+    expect(isRefundRequest("What is your refund policy?")).toBe(false);
+    expect(isRefundRequest("Where is order CSL-1004?")).toBe(false);
+  });
+
+  it("forces the hand-off as Copper's first step on the Support page", async () => {
+    const choices: unknown[] = [];
+    let step = 0;
+    model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        choices.push(options.toolChoice);
+        return {
+          stream: convertArrayToReadableStream(
+            step++ === 0
+              ? copperCalls({ orderId: "CSL-1001", reason: "Not using it" })
+              : copperSays("Refunded."),
+          ),
+        };
+      },
+      doGenerate: async () => agentSays("Done."),
+    });
+    const { askCopper } = await import("@/lib/copper/assistant/ask");
+    await finalValue(
+      (
+        await askCopper({
+          messages: [
+            { role: "user", content: "I'd like a refund for order CSL-1001." },
+          ],
+          useTools: true,
+          refundDesk: desk(100),
+        })
+      ).progress,
+    );
+    expect(choices[0]).toEqual({
+      type: "tool",
+      toolName: "hand_off_to_refund_agent",
+    });
+    expect(choices[1]).not.toEqual(choices[0]);
+  });
+});
