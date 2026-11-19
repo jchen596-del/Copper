@@ -67,7 +67,7 @@ export async function askCopper({
       providerOptions: THOUGHT_SUMMARIES,
       ...(useTools && {
         instructions: desk
-          ? COPPER_INSTRUCTIONS + REFUND_INSTRUCTIONS
+          ? `${REFUND_INSTRUCTIONS}\n\n${COPPER_INSTRUCTIONS}`
           : COPPER_INSTRUCTIONS,
         tools: desk
           ? { ...copperTools, ...refundHandoffTools(desk) }
