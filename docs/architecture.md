@@ -139,3 +139,48 @@ second agent, and a person approving the large ones.
 |---|---|---|
 | Page | `app/support/page.tsx` | The "Refund Console" title and nothing else yet, linked from the header as Support |
 | Chat panel | `components/copper/ask-copper.tsx` | With the `docked` prop it starts open and the page beside it stays clickable. It is the same single agent and tools as on the home page |
+
+## Module 4: Refunds with a second agent and a person in the loop
+
+**Summary:** On the Support page, Copper hands refund requests to a separate
+**Refund agent**. Code refunds anything at or under the auto-refund limit
+($100 by default, changeable in the Refund Console); a person approves or
+rejects anything over it, and Copper tells the customer in the chat.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Page | `app/support/page.tsx` | Renders `<RefundConsole />` and Ask Copper with the `refunds` prop |
+| Refund Console | `components/copper/refund-console.tsx` | The limit (with Save), the "Waiting for approval" queue with **Approve** / **Reject**, the orders and the refund history with who decided each one |
+| Chat panel | `components/copper/ask-copper.tsx` | With `refunds`: refund starter questions, sends the limit and refunds with each question, adds the refund the Refund agent made to the console, shows the Refund agent's steps, and posts a "refund update" when a person decides |
+| Hand-off tool | `lib/copper/assistant/refund-agent.ts` | `hand_off_to_refund_agent` (Copper's tool, Support page only) runs the Refund agent and returns its report, its steps and the refund |
+| Refund agent | `lib/copper/assistant/refund-agent.ts` | Its own instructions and two tools: `look_up_order` and `issue_refund`, up to 4 steps |
+| Refund rule | `lib/copper/orders.ts` | `autoDecision()`: at or under the limit → `refunded`; over → `pending`. `issueRefund()` also refuses unknown orders, amounts over what's left, and orders already refunded or waiting |
+| Data | `lib/copper/data/orders.json`, `lib/copper/refund-store.ts` | Six sample orders (CSL-1001 to CSL-1006). The limit and refunds live in the browser (`localStorage`), shared by the chat and the console |
+| Instructions | `lib/copper/assistant/instructions.ts` | `REFUND_INSTRUCTIONS`, added to Copper's on the Support page: hand refunds off, ask for the order number, never claim a refund the Refund agent didn't report |
+| AI calls | `{ module: 2, feature: "ask-copper" }` and `{ module: 4, feature: "refund-agent" }` | Gemini 2.5 Flash. A refund question costs one streamed Copper call plus one Refund agent call (about 3 model steps) |
+
+**Data flow:** customer asks in the chat → `askCopper()` with the refund desk
+(limit + refunds) → Copper calls `hand_off_to_refund_agent` → the Refund agent
+calls `look_up_order`, then `issue_refund` → code compares the amount with the
+limit → `refunded` or `pending` → report back to Copper, which replies → the
+panel adds the refund to the console. A pending refund waits for **Approve** or
+**Reject** → the store updates it and the chat posts the update.
+
+**Who decides what:** the AI agents understand the request (which order, how
+much, why). Code decides whether a refund is small enough to go through on its
+own. A person decides every refund over the limit.
+
+**Decisions and trade-offs:** Refunds and the limit live in the browser instead
+of a database, so the page works on Vercel with no new service; the trade-off
+is that each browser has its own refunds and the server trusts the limit the
+browser sends (it validates the shape and range). The approve/reject message is
+a fixed template rather than a model call: it's free, instant and can't
+misstate the decision. The Refund agent is a separate model call with its own
+instructions and tools, so Copper never touches `issue_refund` directly.
+
+**Risks and open questions:** Anyone using the page can change the limit or
+approve refunds: a real console needs sign-in and roles, and the limit and
+refunds should move to a server-side table. The return window (30 days) and
+Copper Plus refund terms aren't enforced by `issue_refund` yet. A model could
+claim a refund it didn't make; the instructions forbid it and the console shows
+the real status.

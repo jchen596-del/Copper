@@ -6,6 +6,7 @@
 // answer was worked out.
 import {
   ArrowLeftIcon,
+  BotIcon,
   ArrowRightIcon,
   ArrowUpIcon,
   BrainIcon,
@@ -31,10 +32,18 @@ import { askCopper, type ChatMessage } from "@/lib/copper/assistant/ask";
 import { splitCitations } from "@/lib/copper/assistant/citations";
 import {
   type Progress,
+  REFUND_TOOLS,
   type ToolStep,
   TOOL_LABELS,
 } from "@/lib/copper/assistant/progress";
 import { formatUsd, getPlans, getProducts } from "@/lib/copper/catalog";
+import type { Refund } from "@/lib/copper/orders";
+import {
+  addRefund,
+  onNotice,
+  refundDesk as currentDesk,
+  useRefundState,
+} from "@/lib/copper/refund-store";
 import { cn } from "@/lib/utils";
 
 const STARTERS = [
@@ -43,18 +52,48 @@ const STARTERS = [
   "Is Copper Plus cheaper monthly or yearly?",
 ];
 
-type Turn = { question: string; progress: Progress };
+// On the Support page: one refund under the default $100 limit, one over it.
+const REFUND_STARTERS = [
+  "I'd like a refund for order CSL-1001. I don't use Copper Plus anymore.",
+  "Please refund order CSL-1004. My Copper Home arrived cracked.",
+  "What is your return policy for devices?",
+];
+
+/** A question and Copper's answer; no question for an update Copper posts on its own. */
+type Turn = { question: string | null; progress: Progress };
 type Chats = { tools: Turn[]; noTools: Turn[] };
 
 const WORKING: Progress = { steps: [], reply: "", status: "working" };
 
+const ALL_TOOLS = Object.keys(TOOL_LABELS);
+const SHOP_TOOLS = ALL_TOOLS.filter((name) => !REFUND_TOOLS.includes(name));
+
+/** Questions and replies for the model; an update Copper posted joins the reply before it. */
+function toMessages(turns: Turn[], question: string): ChatMessage[] {
+  const messages: ChatMessage[] = [];
+  for (const turn of turns) {
+    if (turn.question !== null)
+      messages.push({ role: "user", content: turn.question });
+    const last = messages.at(-1);
+    if (last?.role === "assistant")
+      last.content += `\n\n${turn.progress.reply}`;
+    // The model expects the customer to speak first.
+    else if (last)
+      messages.push({ role: "assistant", content: turn.progress.reply });
+  }
+  return [...messages, { role: "user", content: question }];
+}
+
 export function AskCopper({
   aiConfigured,
   docked = false,
+  refunds = false,
 }: {
   aiConfigured: boolean;
   /** Stays open beside the page, which remains clickable (the Support page). */
   docked?: boolean;
+  /** Copper can hand refunds to the Refund agent (the Support page). */
+  refunds?: boolean;
 }) {
   const [open, setOpen] = useState(docked);
   const [useTools, setUseTools] = useState(true);
@@ -64,7 +103,25 @@ export function AskCopper({
 
   const key = useTools ? "tools" : "noTools";
   const turns = chats[key];
-  const busy = turns.at(-1)?.progress.status === "working";
+  const busy = turns.some((turn) => turn.progress.status === "working");
+  const starters = refunds ? REFUND_STARTERS : STARTERS;
+  const toolNames = refunds ? ALL_TOOLS : SHOP_TOOLS;
+
+  // When a person approves or rejects a refund in the Refund Console, Copper
+  // tells the customer here.
+  useEffect(() => {
+    if (!refunds) return;
+    return onNotice((reply) => {
+      setUseTools(true);
+      setChats((all) => ({
+        ...all,
+        tools: [
+          ...all.tools,
+          { question: null, progress: { steps: [], reply, status: "done" } },
+        ],
+      }));
+    });
+  }, [refunds]);
 
   // Open from the header's #ask link or a page load at /#ask. Clicking the
   // link again fires no hashchange, so listen for the click too.
@@ -93,20 +150,25 @@ export function AskCopper({
     const chat = key;
     const index = turns.length;
     // Only finished turns go to the model: questions and Copper's replies.
-    const messages: ChatMessage[] = [
-      ...turns.flatMap(({ question, progress }): ChatMessage[] => [
-        { role: "user", content: question },
-        { role: "assistant", content: progress.reply },
-      ]),
-      { role: "user", content: question },
-    ];
-    const setProgress = (progress: Progress) =>
+    const messages = toMessages(turns, question);
+    const setProgress = (progress: Progress) => {
+      // A refund the Refund agent made goes to the Refund Console.
+      for (const step of progress.steps)
+        if (
+          step.type === "tool" &&
+          step.name === "hand_off_to_refund_agent" &&
+          step.state === "done"
+        ) {
+          const refund = (step.output as { refund?: Refund | null })?.refund;
+          if (refund) addRefund(refund);
+        }
       setChats((all) => ({
         ...all,
         [chat]: all[chat].map((turn, i) =>
           i === index ? { ...turn, progress } : turn,
         ),
       }));
+    };
     setChats((all) => ({
       ...all,
       [chat]: [...all[chat], { question, progress: WORKING }],
@@ -115,6 +177,7 @@ export function AskCopper({
       const { progress } = await askCopper({
         messages,
         useTools: chat === "tools",
+        ...(refunds && { refundDesk: currentDesk() }),
       });
       for await (const update of readLive(progress)) setProgress(update);
     } catch {
@@ -157,7 +220,9 @@ export function AskCopper({
                   Ask Copper
                 </SheetTitle>
                 <SheetDescription className="text-xs text-white/70">
-                  Prices, totals and stock, checked with tools.
+                  {refunds
+                    ? "Prices, stock, docs and refunds, checked with tools."
+                    : "Prices, totals and stock, checked with tools."}
                 </SheetDescription>
               </div>
               <SheetClose asChild>
@@ -196,21 +261,32 @@ export function AskCopper({
               >
                 {turns.map((turn, i) => (
                   <div key={i} className="space-y-4">
-                    <p className="bg-primary text-primary-foreground ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-sm px-4 py-2">
-                      {turn.question}
-                    </p>
-                    <Answer progress={turn.progress} useTools={useTools} />
+                    {turn.question === null ? (
+                      <Update text={turn.progress.reply} />
+                    ) : (
+                      <>
+                        <p className="bg-primary text-primary-foreground ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-sm px-4 py-2">
+                          {turn.question}
+                        </p>
+                        <Answer
+                          progress={turn.progress}
+                          useTools={useTools}
+                          toolNames={toolNames}
+                        />
+                      </>
+                    )}
                   </div>
                 ))}
                 {!busy && (
                   <div className="space-y-2">
                     {turns.length === 0 && (
                       <p className="text-muted-foreground text-sm">
-                        Hi, I&apos;m Copper! Ask me about prices, totals or
-                        stock. Try one of these:
+                        {refunds
+                          ? "Hi, I'm Copper! Ask me about an order, a refund, prices or stock. Try one of these:"
+                          : "Hi, I'm Copper! Ask me about prices, totals or stock. Try one of these:"}
                       </p>
                     )}
-                    {STARTERS.map((starter) => (
+                    {starters.map((starter) => (
                       <button
                         key={starter}
                         type="button"
@@ -234,7 +310,11 @@ export function AskCopper({
                   aria-label="Your question"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
-                  placeholder="Ask about prices or stock…"
+                  placeholder={
+                    refunds
+                      ? "Ask about an order or a refund…"
+                      : "Ask about prices or stock…"
+                  }
                   className="bg-background focus-visible:ring-ring h-10 flex-1 rounded-full border px-4 text-sm outline-none focus-visible:ring-2"
                 />
                 <Button
@@ -259,13 +339,30 @@ export function AskCopper({
   );
 }
 
+/** An update Copper posts on its own: a person's decision on a refund. */
+function Update({ text }: { text: string }) {
+  return (
+    <div
+      data-testid="refund-update"
+      className="bg-card border-primary ml-2 rounded-2xl rounded-tl-sm border-2 p-4 shadow-xs"
+    >
+      <p className="text-primary mb-1 flex items-center gap-1.5 text-xs font-bold">
+        <BotIcon className="size-3.5" /> Copper · refund update
+      </p>
+      <p className="text-sm">{text}</p>
+    </div>
+  );
+}
+
 /** One answer: the rail of stations, then Copper's reply. */
 function Answer({
   progress,
   useTools,
+  toolNames,
 }: {
   progress: Progress;
   useTools: boolean;
+  toolNames: string[];
 }) {
   const { steps, reply, status } = progress;
   const used = new Set(
@@ -293,7 +390,7 @@ function Answer({
           }
         >
           <div className="flex flex-wrap gap-1.5">
-            {Object.keys(TOOL_LABELS).map((name) => (
+            {toolNames.map((name) => (
               <span
                 key={name}
                 className={cn(
@@ -633,6 +730,8 @@ function ToolOutput({ name, output }: { name: string; output: any }) {
       </div>
     );
   }
+  if (name === "hand_off_to_refund_agent" && output?.report)
+    return <RefundHandoff output={output} />;
   if (name === "search_docs" && output?.matches)
     return (
       <ol className="space-y-2 text-xs">
@@ -706,3 +805,64 @@ function Pill({
     </span>
   );
 }
+
+const STATUS: Record<Refund["status"], { label: string; className: string }> = {
+  refunded: { label: "Refunded", className: "bg-accent text-white" },
+  pending: {
+    label: "Waiting for a person",
+    className: "bg-chart-4 text-chart-5",
+  },
+  rejected: { label: "Rejected", className: "bg-chart-3 text-white" },
+};
+
+/** What the Refund agent did, and where its refund stands now. */
+function RefundHandoff({
+  output,
+}: {
+  output: {
+    report: string;
+    refund: Refund | null;
+    steps: { tool: string; input: unknown; output: unknown }[];
+  };
+}) {
+  const { refunds } = useRefundState();
+  const refund =
+    refunds.find((r) => r.id === output.refund?.id) ?? output.refund;
+  return (
+    <div data-testid="refund-handoff" className="space-y-2 text-xs">
+      <p className="flex items-center gap-1.5 font-semibold">
+        <BotIcon className="size-3.5" /> The Refund agent took over
+      </p>
+      <ol className="space-y-1 border-l-2 pl-3">
+        {output.steps.map((step, i) => (
+          <li key={i}>
+            <span className="font-mono font-bold">{step.tool}()</span>{" "}
+            <span className="text-muted-foreground">
+              {describeRefundStep(step.output)}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p className="italic">&ldquo;{output.report}&rdquo;</p>
+      {refund && (
+        <div className="flex items-center justify-between border-t pt-2">
+          <span>
+            {refund.orderId} · {formatUsd(refund.amountUsd)}
+          </span>
+          <Pill className={STATUS[refund.status].className}>
+            {STATUS[refund.status].label}
+          </Pill>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- tool outputs arrive untyped from the stream */
+function describeRefundStep(output: any): string {
+  if (output?.status === "found")
+    return `found ${output.order.id} (${output.order.customer}, ${formatUsd(output.order.totalUsd)})`;
+  if (output?.status === "ok") return output.decision;
+  return output?.message ?? "";
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */

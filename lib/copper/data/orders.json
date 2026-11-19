@@ -1,0 +1,47 @@
+[
+  {
+    "id": "CSL-1001",
+    "customer": "Avery Kim",
+    "date": "2026-11-02",
+    "items": [{ "name": "Copper Plus, monthly (1 month)", "usd": 7.99 }],
+    "totalUsd": 7.99
+  },
+  {
+    "id": "CSL-1002",
+    "customer": "Jordan Reyes",
+    "date": "2026-11-10",
+    "items": [{ "name": "Copper Plus, annual (1 year)", "usd": 79 }],
+    "totalUsd": 79
+  },
+  {
+    "id": "CSL-1003",
+    "customer": "Sam Patel",
+    "date": "2026-11-05",
+    "items": [{ "name": "Copper Notes, Desert Sand", "usd": 129 }],
+    "totalUsd": 129
+  },
+  {
+    "id": "CSL-1004",
+    "customer": "Riley Nguyen",
+    "date": "2026-11-08",
+    "items": [{ "name": "Copper Home, Polished Copper", "usd": 149 }],
+    "totalUsd": 149
+  },
+  {
+    "id": "CSL-1005",
+    "customer": "Taylor Brooks",
+    "date": "2026-11-12",
+    "items": [
+      { "name": "Copper Home, Night Sky", "usd": 149 },
+      { "name": "Copper Notes, Brushed Copper", "usd": 129 }
+    ],
+    "totalUsd": 278
+  },
+  {
+    "id": "CSL-1006",
+    "customer": "Morgan Diaz",
+    "date": "2026-11-14",
+    "items": [{ "name": "Copper Notes, Brushed Copper", "usd": 129 }],
+    "totalUsd": 129
+  }
+]
