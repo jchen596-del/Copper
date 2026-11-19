@@ -17,26 +17,18 @@ export const MODELS = [
 export type ModelId = (typeof MODELS)[number]["id"];
 
 /**
- * Gemini's embedding model. It turns a piece of text into a list of numbers (a
- * "vector") that stands for its meaning, so two passages about the same thing
- * end up with similar numbers. That's what makes search by meaning possible.
- *
- * The model can return up to 3072 numbers per passage; 768 is plenty for a few
- * dozen pages and keeps the saved index about a quarter of the size.
- */
-export const EMBEDDING_MODEL = {
-  id: "google/gemini-embedding-001",
-  googleId: "gemini-embedding-001",
-  dimensions: 768,
-} as const;
-
-export type EmbeddingModelId = typeof EMBEDDING_MODEL.id;
-
-/**
  * The model used when a call doesn't name one. 2.5 Flash writes a summary of
  * its thinking for every question, which Ask Copper shows students.
  */
 export const DEFAULT_MODEL: ModelId = "google/gemini-2.5-flash";
+
+/**
+ * Turns text into a list of numbers so similar meanings can be found (Module 3).
+ * It isn't a chat model, so it isn't in MODELS.
+ */
+export const EMBEDDING_MODEL = "google/gemini-embedding-2";
+/** Shorter than the 3072 default: a smaller passages.json, almost as accurate. */
+export const EMBEDDING_DIMENSIONS = 768;
 
 /** AI_MODEL if it names an approved model, otherwise the default. */
 export function defaultModel(): ModelId {

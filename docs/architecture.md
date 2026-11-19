@@ -97,52 +97,90 @@ each step. Module 3 teaches it to answer from the customer documents.
 | Data | `lib/copper/inventory.ts`, `lib/copper/documents.ts` | Stock from `lib/copper/data/inventory.json`; `DOCUMENTS`: the four customer documents and their PDF paths under `public/docs/`. The PDFs are added in class |
 | AI calls | `{ module: 2, feature: "ask-copper" }` | One streamed call per question |
 
-## Module 3: document search index (RAG)
+## Module 3: Document passages and embeddings
 
-**Summary:** Copper's four customer PDFs are turned into 95 short passages,
-each embedded with Gemini so it can be found by meaning rather than by keyword.
-The passages and their vectors are saved to one JSON file that the app loads
-into memory at startup, ready for Ask Copper to search.
+**Summary:** The four customer PDFs in `public/docs/` are split into passages
+of a few sentences and embedded with Gemini, so Ask Copper can find the
+passages that answer a question and cite their page.
 
 | Piece | Where | What it does |
 |---|---|---|
-| Build script | `scripts/build-rag-index.mts` (`npm run rag:build`) | Reads every PDF in `public/docs/`, drops the header and footer lines that repeat across pages, splits each page into passages of up to 3 sentences or 700 characters, prefixes each with its document title, embeds them all and writes the index |
-| Data | `lib/copper/data/rag-index.json` | 95 passages (0.73 MB): id, document id and title, page number, the embedded text and a 768-number vector |
-| Loader | `lib/copper/rag.ts` | Imports the JSON once at startup, so searching is pure arithmetic. `searchPassages(queryEmbedding)` ranks passages by cosine similarity; `passageCounts()` reports how many came from each document |
-| Tool | `lib/copper/assistant/tools.ts` → `search_documents` | Embeds the shopper's question as a query, returns the closest passages above 0.58 with their document and page, or `nothing_found` / `unavailable` |
-| Lab page | `app/rag/page.tsx` (`/rag`) | Type a question, see the passages and scores that come back. A teaching view of the index, not a customer page |
-| AI calls | `lib/ai/call.ts` → `callEmbed`: `{ module: 3, feature: "rag-index" }` at build, `"rag-search"` on `/rag`, `"ask-copper-search"` from the tool | One batched `gemini-embedding-001` call per build (~1s for 95 passages) and one per question (~300ms). Google reports no token usage for embeddings, so the `ai_calls` line logs a null cost |
+| Build script | `scripts/embed-docs.mjs` (`npm run embed-docs`) | Reads each PDF in `DOCUMENTS` page by page (with `unpdf`), splits pages with `splitPage()`, embeds every passage and writes the JSON. Re-run it when a PDF changes |
+| Splitter | `lib/copper/split-passages.ts` | `splitPage()`: drops the footer lines, then groups sentences three at a time (at most ~600 characters) |
+| Data | `lib/copper/data/passages.json`, `lib/copper/passages.ts` | `PASSAGES`: `documentId`, `title`, `page`, `text` (starts with the document title) and `embedding`. Importing it loads every passage into memory once per server |
+| Tool | `lib/copper/assistant/tools.ts` | `search_docs`: embeds the question, ranks every passage by cosine similarity and returns the 5 closest with title, page, a `/docs/<file>.pdf#page=N` link and a score. The tool card lists them with links; the instructions tell Copper to use it for setup, troubleshooting, warranty and policy questions and to cite the page |
+| Citations | `lib/copper/assistant/citations.ts`, `lib/copper/assistant/instructions.ts` | Copper answers document questions only from `search_docs`, ends every sentence with `[Title, p. N]`, and says "I couldn't find that in our support docs" otherwise. `splitCitations()` lets the panel link each citation to that PDF page; unknown titles stay plain text |
+| AI calls | `callEmbedMany` in `lib/ai/call.ts`, `{ module: 3, feature: "embed-docs" }` | `gemini-embedding-2` at 768 dimensions. One call per run of the script, plus one `{ module: 3, feature: "search-docs" }` call per search. Google doesn't report embedding tokens, so the log's tokens and cost are null |
 
-**Data flow:** `npm run rag:build` → pdf.js text per page → passages → one
-batched embedding call → `rag-index.json` → imported into memory at startup →
-`searchPassages()` at question time.
+**Data flow:** PDF → pages → passages → Gemini embeddings → `passages.json` →
+`PASSAGES` in memory. Question → `search_docs` → question embedding → 5
+closest passages → Copper answers from them and cites the page.
 
-**Decisions and trade-offs:**
+**Decisions and trade-offs:** A JSON file in memory instead of a vector
+database: about 120 passages is under 1 MB, so searching all of them is
+instant and needs no new service. 768 dimensions instead of 3072 keeps the
+file small with little loss in accuracy. The title goes at the start of each
+passage so similar passages from different documents (Copper Home vs. Copper
+Notes) embed differently.
 
-- **768 dimensions, not the model's full 3072.** Keeps the file at 0.73 MB
-  instead of ~3 MB for a handful of pages, with no noticeable loss in ranking.
-  Shorter Gemini vectors come back un-normalized, so the search divides by both
-  vector lengths rather than assuming a length of 1.
-- **A JSON file in the repo, not a vector database.** 95 passages fit in memory
-  with room to spare, the whole index is readable and diffable, and there is no
-  service to set up. A database only starts to pay off in the thousands.
-- **Passage text starts with the document title.** A passage read on its own
-  still says where it came from, which helps both the ranking and the model's
-  citation of it.
-- **Repeated lines are dropped by shape, not by a hard-coded list.** Page
-  numbers differ per page, so lines are compared with their digits blanked out:
-  "Page 1 of 6" and "Page 2 of 6" count as the same line and are removed when
-  they appear on most pages.
+**Risks and open questions:** Questions must be embedded with the same model
+and dimensions (`EMBEDDING_MODEL`, `EMBEDDING_DIMENSIONS`) or the search
+returns nonsense. Tables lose their columns when turned into text. Embeddings match meaning
+better than exact strings, so an error code like C-47 can rank below other
+error-code passages (it was third in testing); keyword search alongside would fix that.
 
-**Risks and open questions:**
+## Module 4 starter: Support page
 
-- The index is a snapshot. Change a PDF and `npm run rag:build` has to run
-  again, or answers quietly go stale. The `builtAt` field records when.
-- Sentence splitting is a regex, so an unusual abbreviation can split a
-  sentence in the wrong place. It only affects passage edges, not correctness.
-- The 0.58 score floor was measured against these four documents, not derived.
-  Questions they answer score 0.63 and up; off-topic ones peak near 0.52.
-  Replace the PDFs with very different ones and that gap should be re-checked.
-- Copper is told to answer only from the passages it gets back and to name the
-  document and page. That is an instruction, not a guarantee: the documents
-  contain deliberate contradictions, so answers still need spot-checking.
+**Summary:** An empty Support page titled "Refund Console", with Ask Copper
+(as finished in Module 3) docked on the right. Module 4 builds refunds here: a
+second agent, and a person approving the large ones.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Page | `app/support/page.tsx` | The "Refund Console" title and nothing else yet, linked from the header as Support |
+| Chat panel | `components/copper/ask-copper.tsx` | With the `docked` prop it starts open and the page beside it stays clickable. It is the same single agent and tools as on the home page |
+
+## Module 4: Refunds with a second agent and a person in the loop
+
+**Summary:** On the Support page, Copper hands refund requests to a separate
+**Refund agent**. Code refunds anything at or under the auto-refund limit
+($100 by default, changeable in the Refund Console); a person approves or
+rejects anything over it, and Copper tells the customer in the chat.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Page | `app/support/page.tsx` | Renders `<RefundConsole />` and Ask Copper with the `refunds` prop |
+| Refund Console | `components/copper/refund-console.tsx` | The limit (with Save), the "Waiting for approval" queue with **Approve** / **Reject**, the orders and the refund history with who decided each one |
+| Chat panel | `components/copper/ask-copper.tsx` | With `refunds`: refund starter questions, sends the limit and refunds with each question, adds the refund the Refund agent made to the console, shows the Refund agent's steps, and posts a "refund update" when a person decides |
+| Hand-off tool | `lib/copper/assistant/refund-agent.ts` | `hand_off_to_refund_agent` (Copper's tool, Support page only) runs the Refund agent and returns its report, its steps and the refund |
+| Refund agent | `lib/copper/assistant/refund-agent.ts` | Its own instructions and two tools: `look_up_order` and `issue_refund`, up to 4 steps |
+| Refund rule | `lib/copper/orders.ts` | `autoDecision()`: at or under the limit → `refunded`; over → `pending`. `issueRefund()` also refuses unknown orders, amounts over what's left, and orders already refunded or waiting |
+| Data | `lib/copper/data/orders.json`, `lib/copper/refund-store.ts` | Six sample orders (CSL-1001 to CSL-1006). The limit and refunds live in the browser (`localStorage`), shared by the chat and the console |
+| Instructions | `lib/copper/assistant/instructions.ts` | `REFUND_INSTRUCTIONS`, added to Copper's on the Support page: hand refunds off, ask for the order number, never claim a refund the Refund agent didn't report |
+| AI calls | `{ module: 2, feature: "ask-copper" }` and `{ module: 4, feature: "refund-agent" }` | Gemini 2.5 Flash. A refund question costs one streamed Copper call plus one Refund agent call (about 3 model steps) |
+
+**Data flow:** customer asks in the chat → `askCopper()` with the refund desk
+(limit + refunds) → Copper calls `hand_off_to_refund_agent` → the Refund agent
+calls `look_up_order`, then `issue_refund` → code compares the amount with the
+limit → `refunded` or `pending` → report back to Copper, which replies → the
+panel adds the refund to the console. A pending refund waits for **Approve** or
+**Reject** → the store updates it and the chat posts the update.
+
+**Who decides what:** the AI agents understand the request (which order, how
+much, why). Code decides whether a refund is small enough to go through on its
+own. A person decides every refund over the limit.
+
+**Decisions and trade-offs:** Refunds and the limit live in the browser instead
+of a database, so the page works on Vercel with no new service; the trade-off
+is that each browser has its own refunds and the server trusts the limit the
+browser sends (it validates the shape and range). The approve/reject message is
+a fixed template rather than a model call: it's free, instant and can't
+misstate the decision. The Refund agent is a separate model call with its own
+instructions and tools, so Copper never touches `issue_refund` directly.
+
+**Risks and open questions:** Anyone using the page can change the limit or
+approve refunds: a real console needs sign-in and roles, and the limit and
+refunds should move to a server-side table. The return window (30 days) and
+Copper Plus refund terms aren't enforced by `issue_refund` yet. A model could
+claim a refund it didn't make; the instructions forbid it and the console shows
+the real status.
